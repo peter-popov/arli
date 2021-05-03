@@ -1,4 +1,5 @@
 # arli - Abstract Routing LIbrary
+[![CI](https://github.com/peter-popov/arli/actions/workflows/rust.yml/badge.svg)](https://github.com/peter-popov/arli/actions/workflows/rust.yml)
 
 **arli** is a Rust libray which provides generic building blocks for route planning in the road netwroks. It provides abstract primites for representing road graphs and implemention of major algithms like road snapping, path matching, one-to-one and matrix routings.
 
