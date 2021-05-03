@@ -1,0 +1,13 @@
+[package]
+name = "arli-service"
+version = "0.1.0"
+authors = ["Peter Popov <petro.popov@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+arli = { path = "../arli" }
+arli-osm = { path = "../arli-osm" }
+warp = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "0.2", features = ["macros"] }
+polyline = "0.8.0"

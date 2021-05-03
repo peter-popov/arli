@@ -1,0 +1,6 @@
+[workspace]
+members = ["arli", "arli-osm", "arli-service"]
+
+
+[profile.release]
+debug = true

@@ -1,0 +1,1 @@
+Service layer. At the moment it implements a simple API partially compatible with [OSRM](https://github.com/Project-OSRM/osrm-backend/blob/master/docs/http.md).

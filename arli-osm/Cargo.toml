@@ -1,0 +1,20 @@
+[package]
+name = "arli-osm"
+version = "0.1.0"
+authors = ["Peter Popov <petro.popov@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+arli = { path = "../arli" }
+clap = "~2.27.0"
+serde = { version = "1.0", features = ["derive"] }
+osmpbfreader = "0.14.0"
+# TODO: need re-use the import from arli
+geo = { version = "0.16.0", features = ["use-serde"] }
+bincode = "1.3.1"
+regex = "1"
+lazy_static = "1.4.0"
+
+
+[profile.release]
+debug = true
