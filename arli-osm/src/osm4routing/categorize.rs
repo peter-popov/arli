@@ -100,7 +100,8 @@ impl EdgeProperties {
         if let Some(captures) = MAX_SPEED_RE.captures(val) {
             let result = captures
                 .name("value")
-                .map(|m| m.as_str().parse::<u8>().unwrap());
+                .map(|m| m.as_str().parse::<u8>()
+                .unwrap_or(30));
             if captures
                 .name("unit")
                 .filter(|m| m.as_str() == "mph")

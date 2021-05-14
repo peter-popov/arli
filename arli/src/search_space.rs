@@ -1,6 +1,7 @@
 use crate::graph::*;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::collections::hash_map::Entry;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 struct State<W: Weight, N: Identifier> {
@@ -25,14 +26,14 @@ impl<W: Weight, N: Identifier> PartialOrd for State<W, N> {
 
 pub struct SearchSpace<W: Weight, N: Identifier> {
   pq: BinaryHeap<State<W, N>>,
-  resolved: HashMap<N, State<W, N>>,
+  labels: HashMap<N, (W, N, bool)>,
 }
 
 impl<W: Weight, N: Identifier> SearchSpace<W, N> {
   pub fn new() -> Self {
     SearchSpace {
       pq: BinaryHeap::new(),
-      resolved: HashMap::new(),
+      labels: HashMap::new(),
     }
   }
 
@@ -41,11 +42,11 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
   }
 
   pub fn init(&mut self, node: N) {
-    self.resolve(node, node, Default::default());
+    self.relax(node, node, &Default::default());
   }
 
   pub fn init_with_cost(&mut self, node: N, cost: W) {
-    self.resolve(node, node, cost);
+    self.relax(node, node, &cost);
   }
 
   pub fn unwind(&self, node: N) -> Vec<N> {
@@ -53,12 +54,12 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
 
     let mut current_node = node;
     loop {
-      if let Some(state) = self.resolved.get(&current_node) {
+      if let Some((_, parent, _)) = self.labels.get(&current_node) {
         result.push(current_node);
-        if current_node == state.id {
+        if current_node == *parent {
           break;
         }
-        current_node = state.id;
+        current_node = *parent;
       } else {
         break;
       }
@@ -66,55 +67,73 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
     result
   }
 
-  pub fn update<G>(&mut self, graph: G) -> bool
+  pub fn update<Dir:ForwardOrBackward, G>(&mut self, graph: G) -> bool
   where
-    G: Copy + Weighted<Weight = W> + IntoNeighbors<Forward, NodeId = N>,
+    G: Copy + Weighted<Weight = W> + IntoNeighbors<Dir, NodeId = N>,
   {
-    if let Some(State { cost, id }) = self.pq.pop() {
-      //println!("PQ: {} @ {}", id, cost);
+    loop {
+      if let Some(State { cost, id }) = self.pq.pop() {
+        //println!("--\nPop: {:?} @ {:?}", id, cost);
 
-      if let Some(resolved) = self.resolved.get(&id) {
-        if cost > resolved.cost {
-          //println!("Drop: {},  {} > {}", id, cost, resolved.cost);
-          return true;
-        }
-      }
-
-      for target_id in neighbors_forward(graph, id) {
-        let path_cost: W = cost + graph.transition_weight(id, target_id);
-        if let Some(target_state) = self.resolved.get(&target_id) {
-          if path_cost >= target_state.cost {
+        // Need to skip if already settled, since we don't decrease priority of existing elements
+        if !self.settle(id) {
             continue;
-          }
         }
 
-        //println!("Relax: ({} -> {}) @ {}", id, target_id, path_cost);
+        //println!("Settled: {:?} @ {:?}", id, cost);
 
-        self.resolve(target_id, id, path_cost);
+        // Relax
+        for target_id in graph.neighbors(id) {
+          // TODO: we need a way to swap arguments going to the cost depening on the direction
+          // For now the workaround is to use different cost-function for the backward search
+          let cost = cost + graph.transition_weight(id, target_id);
+          self.relax(target_id, id, &cost);
+        }
+        return true;
       }
-
-      return true;
+      return false;
     }
-    false
   }
 
-  fn resolve(&mut self, node: N, parent_node: N, path_cost: W) {
-    self.resolved.insert(
-      node,
-      State {
-        cost: path_cost,
-        id: parent_node,
+  pub fn is_settled(&mut self, node: N) -> Option<W> {
+    self.labels.get(&node).filter(|t| t.2).map(|t| t.0)
+  }
+
+  fn settle(&mut self, node: N) -> bool {
+    if let Entry::Occupied(mut entry) = self.labels.entry(node) {
+      if !entry.get_mut().2 {
+        entry.get_mut().2 = true;    
+        return true;
+      }
+    }
+    return false;
+  }
+
+  fn relax(&mut self, node: N, new_parent: N, new_cost: &W) {
+    match self.labels.entry(node) {
+      Entry::Occupied(mut entry) => {
+        let (current_cost, _, is_settled) = entry.get_mut();
+        if new_cost < current_cost {
+          assert!(!*is_settled);
+          self.pq.push(State {cost: *new_cost, id: node});
+          entry.insert((*new_cost, new_parent, false));
+          //println!("Relax: u({:?} -> {:?}) @ {:?}", new_parent, node, new_cost);
+        }
       },
-    );
-    self.pq.push(State {
-      cost: path_cost,
-      id: node,
-    });
+      Entry::Vacant(entry) => {
+        self.pq.push(State {cost: *new_cost, id: node});
+        entry.insert((*new_cost, new_parent, false));
+        //println!("Relax: +({:?} -> {:?}) @ {:?}", new_parent, node, new_cost);
+      }
+    }
   }
 }
 
 #[cfg(test)]
 mod tests {
+  use std::iter::FromIterator;
+  use std::array::IntoIter;
+
   use super::super::test_utils::graph_from_data_and_edges;
   use super::*;
 
@@ -134,49 +153,64 @@ mod tests {
 
     search_space.init(0);
 
-    assert!(search_space.update(weighted_graph));
-    assert!(search_space.update(weighted_graph));
-    assert!(search_space.update(weighted_graph));
-    assert!(search_space.update(weighted_graph));
-    assert!(search_space.update(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
 
-    assert_ne!(search_space.update(weighted_graph), true);
+    assert_ne!(search_space.update::<Forward, _>(weighted_graph), true);
   }
 
-  // #[test]
-  // fn test_backward_update() {
-  //   let mut graph = InMemoryGraph::<u32>::new();
+  #[test]
+  fn test_backward_update() {
+    let graph = graph_from_data_and_edges(
+      vec![1, 2, 3, 4, 5],
+      vec![(0, 1), (1, 2), (2, 3), (3, 4), (3, 1), (2, 4)],
+    );
 
-  //   let n1 = graph.new_node(1);
-  //   let n2 = graph.new_node(2);
-  //   let n3 = graph.new_node(3);
-  //   let n4 = graph.new_node(4);
-  //   let n5 = graph.new_node(5);
+    let weighted_graph =(
+        &graph,
+        |to: &u32, from: &u32| if to > from { to - from + 1 } else { from - to },
+      );
 
-  //   graph
-  //     .add_edge(n1, n2)
-  //     .add_edge(n2, n3)
-  //     .add_edge(n3, n4)
-  //     .add_edge(n4, n5)
-  //     .add_edge(n4, n2)
-  //     .add_edge(n3, n5);
+    let mut search_space = SearchSpace::<u32, u32>::new();
 
-  //   let weighted_graph =
-  //     to_reverse_graph(
-  //       &graph,
-  //       |from: &u32, to: &u32| if to > from { to - from + 1 } else { from - to },
-  //     );
+    search_space.init(4);
 
-  //   let mut search_space = SearchSpace::<u32, u32>::new();
+    assert!(search_space.update::<Backward, _>(weighted_graph));
+    assert!(search_space.update::<Backward, _>(weighted_graph));
+    assert!(search_space.update::<Backward, _>(weighted_graph));
+    assert!(search_space.update::<Backward, _>(weighted_graph));
+    assert!(search_space.update::<Backward, _>(weighted_graph));
 
-  //   search_space.init(n5);
+    assert_ne!(search_space.update::<Backward, _>(weighted_graph), true);
+  }
 
-  //   assert!(search_space.update(weighted_graph));
-  //   assert!(search_space.update(weighted_graph));
-  //   assert!(search_space.update(weighted_graph));
-  //   assert!(search_space.update(weighted_graph));
-  //   assert!(search_space.update(weighted_graph));
+  #[test]
+  fn test_relaxed_properly_second_time() {
+    let graph = graph_from_data_and_edges(
+      vec![0, 1, 2, 3, 4],
+      vec![(0, 1), (0, 2), (2, 3), (1, 3), (3, 4)],
+    );
 
-  //   assert_ne!(search_space.update(weighted_graph), true);
-  // }
+    let costs = HashMap::<_, _>::from_iter(IntoIter::new([((0, 1), 1), ((0, 2), 50), ((2, 3), 50), ((1, 3), 100), ((3, 4), 2)]));
+
+    let weighted_graph = (
+      &graph,
+      |from: &u32, to: &u32| *costs.get(&(*from, *to)).unwrap()
+    );
+
+    let mut search_space = SearchSpace::<u32, u32>::new();
+
+    search_space.init(0);
+
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+    assert!(search_space.update::<Forward, _>(weighted_graph));
+
+    assert_ne!(search_space.update::<Forward, _>(weighted_graph), true);
+  }
 }

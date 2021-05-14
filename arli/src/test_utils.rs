@@ -6,7 +6,8 @@ use std::collections::HashMap;
 pub struct Segment {
   geometry: Vec<Position>,
 }
-pub fn simple_segment_length_cost(from: &Segment, to: &Segment) -> i32 {
+
+pub fn simple_segment_length_cost(from: &Segment, _to: &Segment) -> i32 {
   haversine_distance(&from.geometry[0], &from.geometry[1]) as i32
 }
 

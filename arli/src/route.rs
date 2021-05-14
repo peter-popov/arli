@@ -118,6 +118,44 @@ pub fn route<G: Copy + IntoNeighbors<Forward> + Weighted>(
   }
 }
 
+pub fn route_bidir<G: Copy + IntoNeighbors<Forward> + IntoNeighbors<Backward> + Weighted>(
+  graph: G,
+  from: &MatchedWaypoint<G::NodeId>,
+  to: &MatchedWaypoint<G::NodeId>,
+) -> Option<Route<G::Weight, G::NodeId>> {
+  let mut forward_search: SearchSpace<G::Weight, G::NodeId> = SearchSpace::new();
+  let mut backward_search: SearchSpace<G::Weight, G::NodeId> = SearchSpace::new();
+
+
+  for SnappedOnEdge(_, id) in &from.snapped {
+    //todo: partial cost and augmented graph are needed to properly initialize the start and end edges
+    forward_search.init(*id);
+  }
+
+  for SnappedOnEdge(_, id) in &to.snapped {
+    //todo: partial cost and augmented graph are needed to properly initialize the start and end edges
+    backward_search.init(*id);
+  }
+
+  loop {
+    forward_search.update::<Forward, _>(graph);
+    match forward_search.min() {
+      Some((id, value)) => {
+        if backward_search.is_settled(id).is_some() {
+          return Some(Route {
+            cost: value,
+            // Need to reverse the list to get elements in the routing order
+            ids: forward_search.unwind(id).iter().rev().cloned().collect(),
+          });
+        }
+      }
+      None => return None,
+    }
+
+    backward_search.update::<Backward, _>(graph);
+  }
+}
+
 pub fn collect_route_geometry<G: Copy + IntoGeometry, Ids: Iterator<Item = G::NodeId>>(
   graph: G,
   ids: Ids,
