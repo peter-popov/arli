@@ -27,6 +27,29 @@ impl<W: Weight, N: Identifier> PartialOrd for State<W, N> {
 pub struct SearchSpace<W: Weight, N: Identifier> {
   pq: BinaryHeap<State<W, N>>,
   labels: HashMap<N, (W, N, bool)>,
+  num_resolved_nodes: u32,
+}
+
+trait WeightAccesor<Dir: ForwardOrBackward> {
+  type W: Weight;
+  type N: Identifier;
+  fn weight(&self, from: Self::N, to: Self::N) -> Self::W;
+}
+
+impl<G:Weighted> WeightAccesor<Forward> for G {
+  type W = G::Weight;
+  type N = G::NodeId;
+  fn weight(&self, from: Self::N, to: Self::N) -> Self::W {
+    self.transition_weight(from, to)
+  }
+}
+
+impl<G:Weighted> WeightAccesor<Backward> for G {
+  type W = G::Weight;
+  type N = G::NodeId;
+  fn weight(&self, from: Self::N, to: Self::N) -> Self::W {
+    self.transition_weight(to, from)
+  }
 }
 
 impl<W: Weight, N: Identifier> SearchSpace<W, N> {
@@ -34,6 +57,7 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
     SearchSpace {
       pq: BinaryHeap::new(),
       labels: HashMap::new(),
+      num_resolved_nodes: 0
     }
   }
 
@@ -69,7 +93,15 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
 
   pub fn update<Dir:ForwardOrBackward, G>(&mut self, graph: G) -> bool
   where
+    G: Copy + Weighted<Weight = W> + IntoNeighbors<Dir, NodeId = N>
+  {
+    self.update_and_track(graph, |_, _| {})
+  }
+
+  pub fn update_and_track<Dir:ForwardOrBackward, G, R>(&mut self, graph: G, mut when_relaxed: R) -> bool
+  where
     G: Copy + Weighted<Weight = W> + IntoNeighbors<Dir, NodeId = N>,
+    R: FnMut(N, W)->()
   {
     loop {
       if let Some(State { cost, id }) = self.pq.pop() {
@@ -86,8 +118,9 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
         for target_id in graph.neighbors(id) {
           // TODO: we need a way to swap arguments going to the cost depening on the direction
           // For now the workaround is to use different cost-function for the backward search
-          let cost = cost + graph.transition_weight(id, target_id);
+          let cost = cost + <G as WeightAccesor<Backward>>::weight(&graph, id, target_id);
           self.relax(target_id, id, &cost);
+          when_relaxed(target_id, cost);
         }
         return true;
       }
@@ -95,7 +128,7 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
     }
   }
 
-  pub fn is_settled(&mut self, node: N) -> Option<W> {
+  pub fn is_settled(&self, node: N) -> Option<W> {
     self.labels.get(&node).filter(|t| t.2).map(|t| t.0)
   }
 
@@ -103,6 +136,7 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
     if let Entry::Occupied(mut entry) = self.labels.entry(node) {
       if !entry.get_mut().2 {
         entry.get_mut().2 = true;    
+        self.num_resolved_nodes += 1;
         return true;
       }
     }
@@ -126,6 +160,14 @@ impl<W: Weight, N: Identifier> SearchSpace<W, N> {
         //println!("Relax: +({:?} -> {:?}) @ {:?}", new_parent, node, new_cost);
       }
     }
+  }
+
+  pub fn num_relaxed(&self) -> u32 {
+    return self.labels.len() as u32;
+  }
+
+  pub fn num_resolved(&self) -> u32 {
+    return self.num_resolved_nodes;
   }
 }
 

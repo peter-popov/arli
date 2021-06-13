@@ -23,6 +23,8 @@ async fn osrm_route_request_handler(
         return Err(reject::not_found());
     }
 
+    let route_timer = Instant::now();
+
     let mut matched_destination = match_waypoint(graph.as_ref(), &waypoints.0[1]);
     if matched_destination.snapped.is_empty() {
         println!("Destination is not matched: {:?}", waypoints.0[1]);
@@ -35,7 +37,7 @@ async fn osrm_route_request_handler(
         &mut matched_destination,
     );
 
-    let route = route(
+    let route = route_bidir(
         (&augmented_graph, time_partial_cost),
         &matched_origin,
         &matched_destination,
@@ -53,7 +55,9 @@ async fn osrm_route_request_handler(
             route.ids.iter().cloned(),
         );
 
-        println!("Route found: cost = {:?}, distance = {:?}, duration = {:?}", route.cost, distance, duration);
+        println!("Route found in {}s: cost = {:?}, distance = {:?}, duration = {:?}, nodes = {:?}",
+            route_timer.elapsed().as_secs_f32(), 
+            route.cost, distance, duration, route.num_resolved);
 
         let response = OsrmRouteResponse::new(geometry, distance, duration, route.cost, &waypoints);
         return Ok(warp::reply::json(&response));

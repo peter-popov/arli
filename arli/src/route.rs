@@ -5,6 +5,7 @@ use crate::overlay::OverlayGraph;
 use crate::search_space::*;
 use crate::spatial::*;
 use crate::waypoint::*;
+use std::cmp;
 
 use std::collections::HashSet;
 
@@ -14,6 +15,7 @@ impl<T> RoutableGraph for T where T: GraphData + IntoNeighbors<Forward> + IntoNe
 pub struct Route<W: Weight, N: Identifier> {
   pub cost: W,
   pub ids: Vec<N>,
+  pub num_resolved: u32,
 }
 
 pub fn connect_waypoints_to_graph<G: Copy + IntoNeighbors<Forward> + IntoGeometry + Extensible>(
@@ -85,6 +87,8 @@ pub fn snap_and_route_with_cost<
   }
 
   route((graph, cost), &from_matched, &to_matched)
+
+  //route_bidir((graph, cost), &from_matched, &to_matched)
 }
 
 pub fn route<G: Copy + IntoNeighbors<Forward> + Weighted>(
@@ -110,6 +114,7 @@ pub fn route<G: Copy + IntoNeighbors<Forward> + Weighted>(
             cost: value,
             // Need to reverse the list to get elements in the routing order
             ids: forward_search.unwind(id).iter().rev().cloned().collect(),
+            num_resolved: forward_search.num_resolved(),
           });
         }
       }
@@ -117,6 +122,50 @@ pub fn route<G: Copy + IntoNeighbors<Forward> + Weighted>(
     }
   }
 }
+
+struct BidirectionalSearch<W:Weight, N:Identifier> {
+  min_cost: Option<W>,
+  metting_node: Option<N>,
+}
+
+impl<W:Weight, N:Identifier> BidirectionalSearch<W, N> {
+  pub fn new() -> Self {
+    Self {
+      min_cost: None,
+      metting_node: None,
+    }
+  }
+
+  fn when_forward_relaxed(&mut self, backward: Option<W>, node: N, cost:W) {
+    if let Some(min_bacward) = backward {
+      if self.min_cost.filter(|v| min_bacward + cost < *v).is_none() {
+        self.min_cost.replace(min_bacward + cost);
+        self.metting_node.replace(node);
+      }
+    }
+  }
+
+  fn when_bacward_relaxed(&mut self, forward: Option<W>, node: N, cost:W) {
+    if let Some(min_forward) = forward {
+      if self.min_cost.filter(|v| min_forward + cost < *v).is_none() {
+        self.min_cost.replace(min_forward + cost);
+        self.metting_node.replace(node);
+      }
+    }
+  }
+
+  pub fn route_found(&self, forward: &SearchSpace<W, N>, backward: &SearchSpace<W, N>) -> Option<(N, W)> {
+    // TODO: search seems to stop too late! 9mi vertices vs 6mi for signle direction!
+    if let Some((_, min_f)) = forward.min() { 
+      if let Some((_, min_b)) = backward.min() {
+        let has_min_value = self.min_cost.filter(|min_value| min_f + min_b >= *min_value);
+        return self.metting_node.zip(has_min_value);
+      }
+    }
+    None
+  }
+}
+
 
 pub fn route_bidir<G: Copy + IntoNeighbors<Forward> + IntoNeighbors<Backward> + Weighted>(
   graph: G,
@@ -137,22 +186,31 @@ pub fn route_bidir<G: Copy + IntoNeighbors<Forward> + IntoNeighbors<Backward> + 
     backward_search.init(*id);
   }
 
+  let mut search = BidirectionalSearch::new();
+
   loop {
-    forward_search.update::<Forward, _>(graph);
-    match forward_search.min() {
-      Some((id, value)) => {
-        if backward_search.is_settled(id).is_some() {
-          return Some(Route {
-            cost: value,
-            // Need to reverse the list to get elements in the routing order
-            ids: forward_search.unwind(id).iter().rev().cloned().collect(),
-          });
-        }
-      }
-      None => return None,
+
+    if let Some((node, cost)) = search.route_found(&forward_search, &backward_search) {
+      return Some(Route {
+                cost: cost,
+                // Need to reverse the list to get elements in the routing order
+                ids: forward_search.unwind(node).iter()
+                  .skip(1) // this id will be in both search spaces
+                  .rev()
+                  .cloned()
+                  .chain(backward_search.unwind(node)).collect(),
+                num_resolved: forward_search.num_resolved() + backward_search.num_resolved()
+              });
     }
 
-    backward_search.update::<Backward, _>(graph);
+    forward_search.update_and_track::<Forward, _, _>(graph, |node, cost| {
+      search.when_forward_relaxed(backward_search.is_settled(node), node, cost);
+    });
+    
+    backward_search.update_and_track::<Backward, _, _>(graph, |node, cost| {
+      search.when_bacward_relaxed(forward_search.is_settled(node), node, cost);
+    });
+
   }
 }
 
